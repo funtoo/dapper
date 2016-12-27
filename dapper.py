@@ -55,9 +55,9 @@ class JSONRemoteControlHandler(tornado.web.RequestHandler):
 						if type(data['pos']) != int:
 							self.set_status(400)
 						else:
-							player.play(pos=data['pos'])
+							player.play(pos=data['pos'], flush=True)
 					else:
-						player.play(delta_map[command])
+						player.play(delta_map[command], flush=True)
 		except KeyError:
 			self.set_status(400)
 
@@ -174,7 +174,7 @@ class PlayerResource(object):
 		last_pos = len(self.master_playlist) - 1
 		if pos != None:
 			# specify absolute position
-			new_pos = pos
+			new_pos = pos - 1
 		else:
 			if self.current_track != None:
 				# specify position relative to current track
@@ -195,8 +195,9 @@ class PlayerResource(object):
 			self.current_track = new_pos
 
 	@coroutine
-	def play(self,delta=1, pos=None):
-		self.do_strm_flush()
+	def play(self,delta=1, pos=None, flush=False):
+		if flush:
+			self.do_strm_flush()
 		if delta != 0:
 			self.move_track(delta=delta, pos=pos)
 		yield self.play_track()
