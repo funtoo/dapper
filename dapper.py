@@ -33,19 +33,33 @@ class JSONRemoteControlHandler(tornado.web.RequestHandler):
 		except ValueError:
 			self.set_status(400)
 			return
-		print(data)
-		if "command" in data:
+		try:
 			command = data["command"]
 			if command == 'queue':
-				if "tracks" in data:
-					for track in data["tracks"]:
-						if os.path.exists(track):
-							for ip, player in slimproto_srv.players.items():
-								print("Queueing", track)
-								player.queue_track(track)
-								if player.current_track == None:
-									player.play_next()
-									print("Starting playback...")
+				for track in data["tracks"]:
+					if os.path.exists(track):
+						for ip, player in slimproto_srv.players.items():
+							player.queue_track(track)
+							if player.current_track == None:
+								player.play()
+			elif command == 'flush':
+				for ip, player in slimproto_srv.players.items():
+					player.flush_queue()
+					if player.current_track != None:
+						player.do_strm_flush()
+						player.current_track = None
+			elif command in [ 'next', 'prev', 'restart', 'goto' ]:
+				delta_map = { 'next' : 1, 'prev' : -1, 'restart' : 0 }
+				for ip, player in slimproto_srv.players.items():
+					if command == 'goto':
+						if type(data['pos']) != int:
+							self.set_status(400)
+						else:
+							player.play(pos=data['pos'])
+					else:
+						player.play(delta_map[command])
+		except KeyError:
+			self.set_status(400)
 
 class StreamHandler(tornado.web.RequestHandler):
 
@@ -59,8 +73,10 @@ class StreamHandler(tornado.web.RequestHandler):
 				break
 		if player == None:
 			return
+		if player.current_track == None:
+			return
 
-		fn = player.current_track
+		fn = player.master_playlist[player.current_track]
 		print("Serving",fn)
 		self.set_header('Connection', 'close')
 		self.request.connection.no_keep_alive = True
@@ -80,7 +96,6 @@ class StreamHandler(tornado.web.RequestHandler):
 			elif fn.endswith('.dff') or fn.endswith('.dsf'):
 				self.set_header('Content-Type', 'audio/x-flac' )
 				# drop the 'dop' to transcode to native PCM:
-				print ('DECODE START')
 				process = Subprocess(['/usr/bin/sox',fn,'-b','24','-r','176.4k','-C', '0','-t', 'flac' ,'-','dop'], stdout=Subprocess.STREAM)
 				process.set_exit_callback(exit_callb)
 				while True:
@@ -108,14 +123,7 @@ class HTTPMediaServer(tornado.web.Application):
 	]
 
 	def __init__(self):
-		tornado.web.Application.__init__(self, self.handlers, **settings)
-
-settings = {
-    "cookie_secret": "71oETzKXQAGaYdkL5gEmGeJJFuYh7EQnp2XdTP1o/Vo=",
-    "static_path": os.path.join(os.path.dirname(__file__), "static"),
-    "template_path": os.path.join(os.path.dirname(__file__), "templates"),
-    "cache_json" : False,
-}
+		tornado.web.Application.__init__(self, self.handlers, {})
 
 class PlayerResource(object):
 
@@ -143,41 +151,54 @@ class PlayerResource(object):
 		if self.current_track == None:
 			yield self.play_track()
 
-	def flush_playlist(self):
+	def flush_queue(self):
 		self.master_playlist = []
 
 	@coroutine
 	def play_setup(self):
 		yield self.do_strm_flush()
-		yield self.do_strm_flush()
-		yield self.do_strm_flush()
 		yield self.do_setd(0)
 		yield self.do_setd(4)
 		yield self.do_enable_audio()
 		yield self.do_audg()
-		self.play_next()
+		self.play()
 
 	@coroutine
 	def play_track(self):
 		yield self.do_strm()
 		yield self.do_audg()
 
-	def advance_track(self):
-		if len(self.master_playlist) == 0:
-			self.current_track = None
-		elif self.current_track == None and len(self.master_playlist):
-			self.current_track = self.master_playlist[0]
+	def move_track(self, delta=1, pos=None):
+		if not len(self.master_playlist):
+			return
+		last_pos = len(self.master_playlist) - 1
+		if pos != None:
+			# specify absolute position
+			new_pos = pos
 		else:
-			ix = self.master_playlist.index(self.current_track)
-			ix += 1
-			if ix + 1 >= len(self.master_playlist):
-				# loop
-				ix = 0
-			self.current_track = self.master_playlist[ix]
+			if self.current_track != None:
+				# specify position relative to current track
+				new_pos = self.current_track + delta
+			else:
+				# no current track, so start from beg/end of playlist
+				if delta == 1:
+					new_pos = 0
+				else:
+					new_pos = last_pos
+			# maybe we wrapped around the beg/end:
+			if new_pos < 0:
+				new_pos = last_pos
+			elif new_pos > last_pos:
+				new_pos = 0
+		# final sanity check:
+		if new_pos >= 0 and new_pos < last_pos:
+			self.current_track = new_pos
 
 	@coroutine
-	def play_next(self):
-		self.advance_track()
+	def play(self,delta=1, pos=None):
+		self.do_strm_flush()
+		if delta != 0:
+			self.move_track(delta=delta, pos=pos)
 		yield self.play_track()
 
 	@coroutine
@@ -210,10 +231,9 @@ class PlayerResource(object):
 
 	@coroutine
 	def do_strm(self):
-		f = self.current_track
-		if f == None:
+		if self.current_track == None:
 			return
-		
+		f = self.master_playlist[self.current_track]
 		port = 9000
 		ft = b'f'
 		# "strm" + cmd/autostart/formatbyte/pcmsampsize/pcmrate/channels/endian
@@ -259,9 +279,8 @@ class PlayerResource(object):
 		out["output_buffer_fullness"] = int.from_bytes(data[33:37], byteorder='big')
 		out["elapsed_seconds"] = int.from_bytes(data[37:41], byteorder='big')
 		self.full_percent = 100 * (out["fullness"] / out["buffer_size"])
-		print("STAT",out)
 		if out["event_code"] in [ b'STMd' ]:
-			self.play_next()
+			self.play()
 
 	@coroutine
 	def cmd_helo(self, data):
@@ -294,8 +313,6 @@ class PlayerResource(object):
 			out['caps'] = caps
 		yield self.play_setup()
 
-
-
 class SqueezeBoxServer(TCPServer):
 
 	max_players = 3
@@ -306,7 +323,7 @@ class SqueezeBoxServer(TCPServer):
 
 	@coroutine
 	def handle_stream(self, stream, address):
-		
+
 		if len(self.players) >= self.max_players:
 			stream.close()
 			return
@@ -319,7 +336,7 @@ class SqueezeBoxServer(TCPServer):
 				myin = yield stream.read_bytes(8)
 				command = myin[0:4]
 				length = 0
-				shift = 24 
+				shift = 24
 				for byte in myin[4:]:
 					length = length + byte * (1 << shift)
 					shift -= 8
