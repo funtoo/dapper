@@ -18,7 +18,7 @@ they provide a very capable music playback system, free of the constraints of th
 required:
 
 * **Python version 3.3 or later.**
-* **Python tornado module**, vresion 4 or later.
+* **Python tornado module**, version 4 or later.
 * **For DSD playback, you'll need the `sox` Linux executable** with special DSD patches.
 * **squeezelite**, which can run on the same server as dapper, or somewhere else on the same LAN.
 
