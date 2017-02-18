@@ -175,7 +175,7 @@ class PlayerResource(object):
 		if pos != None:
 			# specify absolute position
 			new_pos = pos - 1
-		else:
+		elif delta:
 			if self.current_track != None:
 				# specify position relative to current track
 				new_pos = self.current_track + delta
@@ -185,13 +185,13 @@ class PlayerResource(object):
 					new_pos = 0
 				else:
 					new_pos = last_pos
-			# maybe we wrapped around the beg/end:
-			if new_pos < 0:
-				new_pos = last_pos
-			elif new_pos > last_pos:
-				new_pos = 0
+		# maybe we wrapped around the beg/end:
+		if new_pos < 0:
+			new_pos = last_pos
+		elif new_pos > last_pos:
+			new_pos = 0
 		# final sanity check:
-		if new_pos >= 0 and new_pos < last_pos:
+		if new_pos >= 0 and new_pos <= last_pos:
 			self.current_track = new_pos
 
 	@coroutine
