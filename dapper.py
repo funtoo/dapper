@@ -7,11 +7,7 @@
 # terms of the Mozilla Public License version 2, or alternatively (at your
 # option) the GNU General Public License version 2 or later.
 
-import os
-import socket
-import sys
-import random
-import string
+import os, socket, sys, random, string
 
 from tornado.tcpserver import TCPServer
 from tornado.ioloop import IOLoop
@@ -22,8 +18,25 @@ import tornado.web
 from tornado.gen import coroutine, sleep
 import tornado.httpserver
 
-def exit_callb(ret):
-	print("DECODE FINISHED!!!",ret)
+# if your DAC doesn't decode PCM DOP streams back into native DSD, set this to False, and then DSD files will be converted on the fly to native 192KHz/24bit PCM audio:
+
+MY_DAC_DOES_DOP = True
+
+formats = {
+	'mp3' : { 'mime' : 'audio/mpeg', 'desc' : 'MP3 (MPEG-1 and/or MPEG-2 Audio Layer III), streamed natively as MP3', 'ext' : [ 'mp3', 'mpeg' ], 'strmbyte' : b'm' },
+	'flac' : { 'mime' : 'audio/flac', 'desc' : 'FLAC, streamed natively as FLAC', 'ext' : [ 'flac' ], 'strmbyte' : b'f' },
+	'dsd' : { 'mime' : 'audio/flac', 'desc' : 'DSD streams converted to 192KHz/24bit PCM and streamed in FLAC format (high-res PCM for non-DSD DAC(s))', 'ext' : [ 'dsf', 'dff' ], 'soxopts' : [ '-b','24','-r','192k','-C', '0', '-t', 'flac', '-' ], 'strmbyte' : b'f' }
+}
+
+if MY_DAC_DOES_DOP:
+	# change the sox command to properly encode DSD audio into DOP first, before writing out FLAC:
+	formats['dsd']['soxopts'].append('dop')
+	formats['dsd']['soxopts'][formats['dsd']['soxopts'].index('192k')] = '176.4k'
+	formats['dsd']['desc'] = 'DSD streams encoded as DOP PCM and streamed in FLAC format (bit-perfect for DSD DACs)'
+
+print('The following formats are enabled:\n')
+for k in sorted(formats.keys()):
+	print('   %s' % formats[k]['desc'])
 
 class JSONRemoteControlHandler(tornado.web.RequestHandler):
 
@@ -61,11 +74,17 @@ class JSONRemoteControlHandler(tornado.web.RequestHandler):
 		except KeyError:
 			self.set_status(400)
 
+def getMediaSettingsForFile(fn):
+	ext = fn.split(".")[-1].lower()
+	for f,d in formats.items():
+		if ext in d['ext']:
+			return d
+	return None
+
 class StreamHandler(tornado.web.RequestHandler):
 
 	@coroutine
 	def get(self, path):
-		
 		player = None
 		for myid, myplayer in slimproto_srv.players.items():
 			if myid == path:
@@ -75,45 +94,39 @@ class StreamHandler(tornado.web.RequestHandler):
 			return
 		if player.current_track == None:
 			return
-
 		fn = player.master_playlist[player.current_track]
 		print("Serving",fn)
 		self.set_header('Connection', 'close')
 		self.request.connection.no_keep_alive = True
-		process = None
 		try:
-			if fn.endswith('.flac'):
-				self.set_header('Content-Type', 'audio/x-flac')
+			format_settings = getMediaSettingsForFile(fn)
+			if format_settings == None:
+				self.set_error(400)
+				return
+			self.set_header('Content-Type', format_settings['mime'])
+			if not 'soxopts' in format_settings:
+				# just send the file as-is, without help from sox:
 				a = open(fn, 'rb')
 				while True:
 					data = a.read(65536)
 					if data == b'':
-						print("EOD")
 						break
 					else:
 						self._write_buffer.append(data)
 				a.close()
-			elif fn.endswith('.dff') or fn.endswith('.dsf'):
-				self.set_header('Content-Type', 'audio/x-flac' )
-				# drop the 'dop' to transcode to native PCM:
-				process = Subprocess(['/usr/bin/sox',fn,'-b','24','-r','176.4k','-C', '0','-t', 'flac' ,'-','dop'], stdout=Subprocess.STREAM)
-				process.set_exit_callback(exit_callb)
+			else:
+				process = Subprocess(['/usr/bin/sox',fn] + format_settings['soxopts'], stdout=Subprocess.STREAM)
 				while True:
 					if False and fullpercent > 95:
 						nxt = sleep(0.25)
 						yield nxt
-						sys.stdout.write('z')
-						sys.stdout.flush()
 						continue
-					sys.stdout.write('.')
-					sys.stdout.flush()
 					data = yield process.stdout.read_bytes(32768,partial=True)
 					self._write_buffer.append(data)
 					ret = yield self.flush()
 		except tornado.iostream.StreamClosedError:
 			print("Stream unexpectedly closed.")
 		self.finish()
-		print("FLUSHED")
 
 class HTTPMediaServer(tornado.web.Application):
 	name = "SqueezeBox Server"
@@ -235,10 +248,10 @@ class PlayerResource(object):
 		if self.current_track == None:
 			return
 		f = self.master_playlist[self.current_track]
+		format_settings = getMediaSettingsForFile(f)
 		port = 9000
-		ft = b'f'
 		# "strm" + cmd/autostart/formatbyte/pcmsampsize/pcmrate/channels/endian
-		out = b"strms1" + ft + "????".encode()
+		out = b"strms1" + format_settings['strmbyte'] + "????".encode()
 		# threshold, spdif_enable, trans_period, trans_type, flags, output thresh, reserved
 		out += bytes([255,0,10,ord('0'),0,0,0])
 		# replay gain
