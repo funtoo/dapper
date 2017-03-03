@@ -52,6 +52,13 @@ it is important to specify the -o option, above, to hit the _raw_ playback devic
 Also note the important `-s` option which specifies where squeezelite will look for dapper. In this case, it will look for dapper
 running on the same host (localhost) port 3483, which is the standard control port for the SqueezeBox protocol.
 
+## DSD Support
+
+If you are not planning to play back DSD files, you can safely skip this section. If you *are* planning to play back DSD, you will
+want to let dapper know whether your DAC supports DSD64. If it supports DSD64 via DOP, then ensure that MY_DAC_DOES_DOP is set to
+True in the code; otherwise False.
+
+
 Now that squeezelite is running, you can now start dapper:
 
 ```
@@ -62,15 +69,20 @@ Now, to play back music, in another console, use the `musicq.py` command to tell
 
 ```
 # python3 ./musicq.py /path/to/myfile.flac /path/to/myfile2.flac
+
 ```
+
+# Features
+
+* Playback of FLAC, MP3, and SACD formats (dsf, dff).
+* Ability to work with DACs that support DSD64 and those that just do high-res PCM for playback of SACD formats.
+* Web API for music control.
+
 ## Limitations
 
 Currently, dapper has a bunch of easy-to-fix limitations to encourage GitHub pull requests :)
 
-* The only command available is 'queue', via `musicq.py`, to add music files to the playlist.
 * It is not tested with real Squeezeboxes, and may or may not work with them.
-* MP3 playback is not supported but is trivial to add to the code.
-* DSD files will be output in DOP format, regardless if your DAC actually supports it. Using sox, it is possible to have DSD converted to pure PCM at high bitrates for DACs that don't support DOP, and they still sound quite good, perhaps with a loss of a bit of the 'smoothness' that DSD offers.
 * No music metadata or browsing is supported. Write separate programs to do this. Dapper is meant to be tiny and functional :)
 
 ## The SlimServer/SqueezeBox Protocol
