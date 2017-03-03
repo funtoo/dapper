@@ -83,6 +83,7 @@ def getMediaSettingsForFile(fn):
 
 class StreamHandler(tornado.web.RequestHandler):
 
+
 	@coroutine
 	def get(self, path):
 		player = None
@@ -115,13 +116,16 @@ class StreamHandler(tornado.web.RequestHandler):
 						self._write_buffer.append(data)
 				a.close()
 			else:
-				process = Subprocess(['/usr/bin/sox',fn] + format_settings['soxopts'], stdout=Subprocess.STREAM)
+				# link player to the stream process so that is can kill it if it is flushing the stream
+				player.process = Subprocess(['/usr/bin/sox',fn] + format_settings['soxopts'], stdout=Subprocess.STREAM)
 				while True:
 					if False and fullpercent > 95:
 						nxt = sleep(0.25)
 						yield nxt
 						continue
-					data = yield process.stdout.read_bytes(32768,partial=True)
+					if not player.process:
+						break
+					data = yield player.process.stdout.read_bytes(32768,partial=True)
 					self._write_buffer.append(data)
 					ret = yield self.flush()
 		except tornado.iostream.StreamClosedError:
@@ -148,6 +152,7 @@ class PlayerResource(object):
 		self.current_track = None
 		self.full_percent = None
 		self.codecs = []
+		self.process = None
 
 	@property
 	def stream(self):
@@ -231,6 +236,10 @@ class PlayerResource(object):
 
 	@coroutine
 	def do_strm_flush(self):
+		if self.process:
+			# kill HTTP streaming process if it exists so it doesn't just sit there
+			self.process.proc.terminate()
+			self.process = None
 		out = 'strmq0m????'.encode() + bytes([0,0,0,ord('0'),0,0,0,0,0,0,0,0,0,0,0,0,0])
 		data_len = len(out)
 		out = bytes([ data_len//256, data_len%256]) + out
@@ -331,9 +340,10 @@ class SqueezeBoxServer(TCPServer):
 
 	max_players = 3
 
-	def __init__(self):
+	def __init__(self, http_server):
 		super().__init__()
 		self.players = {}
+		self.http_server = http_server
 
 	@coroutine
 	def handle_stream(self, stream, address):
@@ -379,7 +389,7 @@ application = HTTPMediaServer()
 http_server = tornado.httpserver.HTTPServer(application, xheaders=True)
 http_server.bind(9000)
 http_server.start()
-slimproto_srv = SqueezeBoxServer()
+slimproto_srv = SqueezeBoxServer(http_server)
 slimproto_srv.listen(3483)
 ioloop = IOLoop.instance()
 ioloop.spawn_callback(reply)
