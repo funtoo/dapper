@@ -106,9 +106,13 @@ class StreamHandler(tornado.web.RequestHandler):
 				return
 			self.set_header('Content-Type', format_settings['mime'])
 			if not 'soxopts' in format_settings:
+				player.process = True # dummy value that we just use to quick break out if we need to
 				# just send the file as-is, without help from sox:
 				a = open(fn, 'rb')
 				while True:
+					if not player.process:
+						print("aborting stream")
+						break
 					data = a.read(65536)
 					if data == b'':
 						break
@@ -124,6 +128,7 @@ class StreamHandler(tornado.web.RequestHandler):
 						yield nxt
 						continue
 					if not player.process:
+						print("aborting stream")
 						break
 					data = yield player.process.stdout.read_bytes(32768,partial=True)
 					self._write_buffer.append(data)
@@ -237,8 +242,10 @@ class PlayerResource(object):
 	@coroutine
 	def do_strm_flush(self):
 		if self.process:
-			# kill HTTP streaming process if it exists so it doesn't just sit there
-			self.process.proc.terminate()
+			if self.process != True:
+				# True is a dummy value when there's no subprocess generating the bitstream, and we just want
+				# to break out of our python http_server streaming loop. If we have a real subprocess, we kill:
+				self.process.proc.terminate()
 			self.process = None
 		out = 'strmq0m????'.encode() + bytes([0,0,0,ord('0'),0,0,0,0,0,0,0,0,0,0,0,0,0])
 		data_len = len(out)
