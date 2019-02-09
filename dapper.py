@@ -15,6 +15,7 @@ from tornado.process import Subprocess
 from tornado.escape import json_decode
 
 import tornado.web
+import tornado.websocket
 from tornado.gen import coroutine, sleep
 import tornado.httpserver
 
@@ -25,7 +26,8 @@ MY_DAC_DOES_DOP = True
 formats = {
 	'mp3' : { 'mime' : 'audio/mpeg', 'desc' : 'MP3 (MPEG-1 and/or MPEG-2 Audio Layer III), streamed natively as MP3', 'ext' : [ 'mp3', 'mpeg' ], 'strmbyte' : b'm' },
 	'flac' : { 'mime' : 'audio/flac', 'desc' : 'FLAC, streamed natively as FLAC', 'ext' : [ 'flac' ], 'strmbyte' : b'f' },
-	'dsd' : { 'mime' : 'audio/flac', 'desc' : 'DSD streams converted to 192KHz/24bit PCM and streamed in FLAC format (high-res PCM for non-DSD DAC(s))', 'ext' : [ 'dsf', 'dff' ], 'soxopts' : [ '-b','24','-r','192k','-C', '0', '-t', 'flac', '-' ], 'strmbyte' : b'f' }
+	'dsd' : { 'mime' : 'audio/flac', 'desc' : 'DSD streams converted to 192KHz/24bit PCM and streamed in FLAC format (high-res PCM for non-DSD DAC(s))', 'ext' : [ 'dsf', 'dff' ], 'soxopts' : [ '-b','24','-r','192k','-C', '0', '-t', 'flac', '-' ], 'strmbyte' : b'f' },
+	'aac' : { 'mime' : 'audio/aac', 'desc' : 'AAC and HE-AAC', 'ext' : [ 'm4a' ], 'strmbyte' : b'l', 'soxopts' : [ '-b', '16', '-r', '48k', '-C', '0', '-t', 'flac', '-' ] }
 }
 
 if MY_DAC_DOES_DOP:
@@ -38,6 +40,40 @@ print('The following formats are enabled:\n')
 for k in sorted(formats.keys()):
 	print('   %s' % formats[k]['desc'])
 
+def handleCommand(data):
+	command = data["command"]
+	if command == 'queue':
+		for track in data["tracks"]:
+			if os.path.exists(track):
+				for ip, player in slimproto_srv.players.items():
+					player.queue_track(track)
+					if player.current_track == None:
+						player.play()
+	elif command == 'flush':
+		for ip, player in slimproto_srv.players.items():
+			player.flush_queue()
+			if player.current_track != None:
+				player.do_strm_flush()
+				player.current_track = None
+	elif command in [ 'next', 'prev', 'restart', 'goto' ]:
+		delta_map = { 'next' : 1, 'prev' : -1, 'restart' : 0 }
+		for ip, player in slimproto_srv.players.items():
+			if command == 'goto':
+				if type(data['pos']) != int:
+					self.set_status(400)
+				else:
+					player.play(pos=data['pos'], flush=True)
+			else:
+				player.play(delta_map[command], flush=True)
+
+class JSONRemoteControlWebSocket(tornado.websocket.WebSocketHandler):
+	def on_message(self, message):
+		try:
+			data = json_decode(message)
+			handleCommand(data)
+		except Exception:
+			pass
+
 class JSONRemoteControlHandler(tornado.web.RequestHandler):
 
 	def post(self):
@@ -47,30 +83,7 @@ class JSONRemoteControlHandler(tornado.web.RequestHandler):
 			self.set_status(400)
 			return
 		try:
-			command = data["command"]
-			if command == 'queue':
-				for track in data["tracks"]:
-					if os.path.exists(track):
-						for ip, player in slimproto_srv.players.items():
-							player.queue_track(track)
-							if player.current_track == None:
-								player.play()
-			elif command == 'flush':
-				for ip, player in slimproto_srv.players.items():
-					player.flush_queue()
-					if player.current_track != None:
-						player.do_strm_flush()
-						player.current_track = None
-			elif command in [ 'next', 'prev', 'restart', 'goto' ]:
-				delta_map = { 'next' : 1, 'prev' : -1, 'restart' : 0 }
-				for ip, player in slimproto_srv.players.items():
-					if command == 'goto':
-						if type(data['pos']) != int:
-							self.set_status(400)
-						else:
-							player.play(pos=data['pos'], flush=True)
-					else:
-						player.play(delta_map[command], flush=True)
+			handleCommand(data)
 		except KeyError:
 			self.set_status(400)
 
@@ -141,6 +154,7 @@ class HTTPMediaServer(tornado.web.Application):
 	name = "SqueezeBox Server"
 	handlers = [
 		(r"/control", JSONRemoteControlHandler),
+		(r"/controlsocket", JSONRemoteControlWebSocket),
 		(r"/stream/(.*)", StreamHandler)
 	]
 

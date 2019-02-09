@@ -14,7 +14,7 @@ class Client(object):
 		self.ioloop = IOLoop.instance()
 		self.ws = None
 		self.connect()
-		PeriodicCallback(self.keep_alive, 20000, io_loop=self.ioloop).start()
+		PeriodicCallback(self.keep_alive, 20000).start()
 		self.ioloop.start()
 
 	@gen.coroutine
@@ -23,6 +23,7 @@ class Client(object):
 			self.ws = yield websocket_connect(self.url)
 		except Exception:
 			print("connection error")
+			raise
 		else:
 			print("connected to", self.url)
 			self.run()
