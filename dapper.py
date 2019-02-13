@@ -18,6 +18,7 @@ import tornado.web
 import tornado.websocket
 from tornado.gen import coroutine, sleep
 import tornado.httpserver
+import time
 
 # if your DAC doesn't decode PCM DOP streams back into native DSD, set this to False, and then DSD files will be converted on the fly to native 192KHz/24bit PCM audio:
 
@@ -114,7 +115,7 @@ class StreamHandler(tornado.web.RequestHandler):
 		self.request.connection.no_keep_alive = True
 		try:
 			format_settings = getMediaSettingsForFile(fn)
-			if format_settings == None:
+			if format_settings is None:
 				self.set_error(400)
 				return
 			self.set_header('Content-Type', format_settings['mime'])
@@ -130,20 +131,20 @@ class StreamHandler(tornado.web.RequestHandler):
 					if data == b'':
 						break
 					else:
-						self._write_buffer.append(data)
+						if len(self._write_buffer) > 1048576:
+							time.sleep(0.1)
+							continue
+						else:
+							self._write_buffer.append(data)
 				a.close()
 			else:
 				# link player to the stream process so that is can kill it if it is flushing the stream
 				player.process = Subprocess(['/usr/bin/sox',fn] + format_settings['soxopts'], stdout=Subprocess.STREAM)
 				while True:
-					if False and fullpercent > 95:
-						nxt = sleep(0.25)
-						yield nxt
-						continue
 					if not player.process:
 						print("aborting stream")
 						break
-					data = yield player.process.stdout.read_bytes(32768,partial=True)
+					data = yield player.process.stdout.read_bytes(32768, partial=True)
 					self._write_buffer.append(data)
 					ret = yield self.flush()
 		except tornado.iostream.StreamClosedError:
