@@ -127,14 +127,14 @@ class StreamHandler(tornado.web.RequestHandler):
 					if not player.process:
 						print("aborting stream")
 						break
-					data = a.read(65536)
-					if data == b'':
-						break
 					else:
 						if len(self._write_buffer) > 1048576:
 							time.sleep(0.1)
 							continue
 						else:
+							data = a.read(65536)
+							if data == b'':
+								break
 							self._write_buffer.append(data)
 				a.close()
 			else:
