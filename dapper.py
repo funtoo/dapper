@@ -120,7 +120,8 @@ class StreamHandler(tornado.web.RequestHandler):
 				return
 			self.set_header('Content-Type', format_settings['mime'])
 			if not 'soxopts' in format_settings:
-				player.process = True # dummy value that we just use to quick break out if we need to
+				player.process = True
+				# dummy value that we just use to quick break out if we need to
 				# just send the file as-is, without help from sox:
 				a = open(fn, 'rb')
 				while True:
@@ -128,7 +129,7 @@ class StreamHandler(tornado.web.RequestHandler):
 						print("aborting stream")
 						break
 					else:
-						if len(self._write_buffer) > 1048576:
+						if self.full_percent > 90:
 							time.sleep(0.1)
 							continue
 						else:
@@ -136,6 +137,7 @@ class StreamHandler(tornado.web.RequestHandler):
 							if data == b'':
 								break
 							self._write_buffer.append(data)
+							del data
 				a.close()
 			else:
 				# link player to the stream process so that is can kill it if it is flushing the stream
